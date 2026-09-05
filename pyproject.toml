@@ -1,0 +1,23 @@
+[project]
+name = "mcdoc-pydantic-generator"
+version = "0.1.0"
+description = "A close Pydantic port of mcdoc-ts-generator in a beet plugin."
+readme = "README.md"
+authors = [
+    { name = "Trplnr", email = "triopane30@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "beet>=0.117.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "rich>=15.0.0",
+    "ruff>=0.16.6",
+]

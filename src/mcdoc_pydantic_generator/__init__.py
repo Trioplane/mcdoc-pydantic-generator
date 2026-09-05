@@ -1,2 +1,1 @@
-def hello() -> str:
-    return "Hello from mcdoc-pydantic-generator!"
+"""A close Pydantic port of mcdoc-ts-generator in a beet plugin."""

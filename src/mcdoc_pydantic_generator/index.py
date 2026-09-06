@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Any, TypedDict
 
 import requests
@@ -23,14 +24,13 @@ McdocSymbols = TypedDict('McdocSymbols', {
     "mcdoc/dispatcher": dict[str, dict[str, Any]]
 })
     
-def fetch_mcdoc(mcdoc_symbols_src: str) -> McdocSymbols:
+def fetch_mcdoc(mcdoc_symbols_src: str | Path) -> McdocSymbols:
     try:
-        # TODO: replace with fetch utils
-        fetched_src = requests.get(mcdoc_symbols_src)
+        fetched_src = fetch_one(mcdoc_symbols_src)
         fetched_src.raise_for_status()
     
         return fetched_src.json()
-    except requests.RequestException as e:
+    except requests.RequestException:
         logger.error("Error occured while fetching mcdoc")
         raise
 
@@ -48,7 +48,7 @@ def fetch_registries(version_id: str):
             result[id] = [f"minecraft:{e}" for e in data[id]]  # ty: ignore[invalid-key]
         
         return [result, etag]
-    except requests.RequestException as e:
+    except requests.RequestException:
         logger.error("Error occured while fetching registries")
         raise
     
@@ -65,9 +65,10 @@ def fetch_block_states(version_id: str):
         
         result = {}
         
-        for id in data:
+        for id in data:  # noqa: PLC0206
             result[id] = data[id]
+            
+        return [result, etag]
     except requests.RequestException as e:
-        logger.warning(f"Error occurred while fetching block states: {str(e)}")
+        logger.warning(f"Error occurred while fetching block states: {e!r}")
     
-    return [result, etag]

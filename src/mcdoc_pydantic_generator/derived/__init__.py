@@ -239,3 +239,18 @@ AssetsFileCategories = (
 )
 
 FileCategories = (*DataFileCategories, *AssetsFileCategories)
+
+# == @spyglassmc/core/src/common/utils.ts > ResourceLocation#lengthen
+
+NamespacePathSep = ':'
+
+DefaultNamespace = 'minecraft'
+
+def lengthen_resource_location(value: str) -> str:
+    match value.index(NamespacePathSep):
+        case -1:
+            return f'{DefaultNamespace}{NamespacePathSep}{value}'
+        case 0:
+            return f'{DefaultNamespace}{value}'
+        case _:
+            return value

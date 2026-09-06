@@ -2,11 +2,13 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired
+from typing_extensions import TypedDict
 
 import requests
+import rich
 from beet import LATEST_MINECRAFT_VERSION
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from mcdoc_pydantic_generator import derived
 from mcdoc_pydantic_generator.util.fetch import fetch_one
@@ -22,16 +24,16 @@ VANILLA_MCDOC_URI = 'mcdoc://vanilla-mcdoc/symbols.json'
 
 
 class GeneratorOptions(BaseModel):
-    mcdoc_symbols_src: str | Path | None = VANILLA_MCDOC_SOURCES[0]
+    mcdoc_symbols_src: str | Path | None = None
     minecraft_version: str = LATEST_MINECRAFT_VERSION
     out_dir: str | None = 'types'
     
 McdocSymbols = TypedDict('McdocSymbols', {
-    'ref': str,
+    'ref': NotRequired[str],
     'mcdoc': dict[str, Any],
     'mcdoc/dispatcher': dict[str, dict[str, Any]]
-})
-    
+}, extra_items=Any)
+
 def fetch_mcdoc(mcdoc_symbols_src: str | Path) -> McdocSymbols:
     try:
         fetched_src = fetch_one(mcdoc_symbols_src)
@@ -59,17 +61,15 @@ def fetch_registries(version_id: str) -> tuple[dict[str, list[str]], str | None]
     except Exception:
         logger.error('Error occured while fetching registries')
         raise
-    
-type BlockStateData = tuple[dict[str, list[str]], dict[str, str]]
 
-def fetch_block_states(version_id: str) -> tuple[dict[str, BlockStateData], str | None]:
+def fetch_block_states(version_id: str) -> tuple[derived.McmetaStates, str | None]:
     logger.debug(f'[fetch_block_states] {version_id}')
 
     try:
         req = fetch_one(f'https://api.spyglassmc.com/mcje/versions/{version_id}/block_states')
         etag = req.headers.get("ETag")
         
-        data: dict[str, BlockStateData] = req.json()
+        data: derived.McmetaStates = req.json()
         
         result = data
         # Note. in mcdoc-ts-parser, this is a map which is why it had to do a for loop to copy data to result.
@@ -111,13 +111,15 @@ def fetch_version(target_version: str) -> str:
         
     release = version["id"]
     
-    return release    
+    return release
     
 class SymbolEntry(BaseModel):
     source: str
     type_def: dict[str, Any]
 
 class SymbolTable(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    
     mcdoc: dict[str, SymbolEntry] = {}
     dispatchers: dict[str, dict[str, SymbolEntry]] = {}
     
@@ -142,7 +144,20 @@ def mcdoc_registrar(table: SymbolTable, source: str, symbols: McdocSymbols) -> N
             else:
                 table.dispatchers[dispatcher][member_id] = SymbolEntry(source=source, type_def=type_def)
                 
-    duration = time.perf_counter() - start
+    for resource_category, resource_category_entries in symbols.items():
+        if resource_category in ('mcdoc', 'mcdoc/dispatcher', 'ref'):
+            continue
+        
+        table.__dict__.setdefault(resource_category, [])
+        for entry in resource_category_entries:
+            if entry in table.__dict__[resource_category]:
+                logger.debug(f'Re-entry of {entry} in {resource_category}.')
+                
+            table.__dict__[resource_category].append(entry)
+        
+        
+                
+    duration = (time.perf_counter() - start) * 1000
     logger.debug(f'[mcdoc_registrar] Done in {duration}ms')
     
 # skip initialize, its spyglass stuff
@@ -157,6 +172,7 @@ def generate(options: GeneratorOptions):
         try:
             fetched_mcdoc = fetch_mcdoc(vanilla_mcdoc_source)
             vanilla_mcdoc_data = (fetched_mcdoc, vanilla_mcdoc_source)
+            break
         except Exception as e:
             if isinstance(e, KeyboardInterrupt):
                 raise
@@ -174,11 +190,87 @@ def generate(options: GeneratorOptions):
     )
     
     # Add registries to the symbol table
-    registries, registries_etag = fetch_registries(options.minecraft_version)
-    block_states, block_states_etag = fetch_block_states(options.minecraft_version)
+    version = fetch_version(options.minecraft_version)
+    
+    registries, registries_etag = fetch_registries(version)
+    block_states, block_states_etag = fetch_block_states(version)
     fluids: derived.McmetaStates = derived.Fluids
     translation_keys = fetch_translation_keys()
     
     # TODO: Transform all of that above into mcdoc symbols and register into symbol table
     
+    # == @spyglassmc/java-edition/src/dependency/mcmeta.ts > symbolRegistrar > addStatesSymbols
+    state_types = {'block': block_states, 'fluid': fluids}
+    state_type_mcdoc_symbols: McdocSymbols = {
+        'mcdoc': {},
+        'mcdoc/dispatcher': {},
+    }
+    for _type, states in state_types.items():
+        current_mcmeta_state = f'mcdoc:{_type}_states'
+        current_mcmeta_state_keys = f'mcdoc:{_type}_state_keys'
+        
+        state_type_mcdoc_symbols['mcdoc/dispatcher'].setdefault(current_mcmeta_state, {})
+        state_type_mcdoc_symbols['mcdoc/dispatcher'].setdefault(current_mcmeta_state_keys, {})
+        
+        for id, [properties, _]in states.items():
+            state_type_def_symbol_data = {
+                'kind': 'struct',
+                'fields': [{
+                    'kind': 'pair',
+                    'key': prop_key,
+                    'optional': True,
+                    'type': {
+                        'kind': 'union',
+                        'members': [{
+                            'kind': 'literal',
+                            'value': { 'kind': 'string', value: value }
+                        } for value in prop_value]
+                    }
+                } for prop_key, prop_value in properties.items()]
+            }
+            state_type_mcdoc_symbols['mcdoc/dispatcher'][current_mcmeta_state][id] = state_type_def_symbol_data
+        
+            state_keys_type_def_symbol_data = {
+                'kind': 'union',
+                'members': [{
+                    'kind': 'literal',
+                    'value': { 'kind': 'string', 'value': prop_key }
+                } for prop_key in properties]
+            }
+            state_type_mcdoc_symbols['mcdoc/dispatcher'][current_mcmeta_state_keys][id] = state_keys_type_def_symbol_data
+        
+    mcdoc_registrar(
+        table=symbol_table,
+        source='MCMETA_STATES',
+        symbols=state_type_mcdoc_symbols
+    )
+        
+    # TODO: == @spyglassmc/java-edition/src/dependency/mcmeta.ts > symbolRegistrar > addRegistrySymbols
+    registry_mcdoc_symbols: McdocSymbols = {
+        'mcdoc': {},
+        'mcdoc/dispatcher': {}
+    }
+    
+    for registry_id, registry in registries.items():
+        if registry_id in (*derived.FileCategories, *derived.RegistryCategories):
+            for entry_id in registry:
+                registry_mcdoc_symbols.setdefault(registry_id, [])  # ty: ignore[no-matching-overload]
+                registry_mcdoc_symbols[registry_id].append(derived.lengthen_resource_location(entry_id))  # ty: ignore[unresolved-attribute]
+                
+    mcdoc_registrar(
+        table=symbol_table,
+        source='MCMETA_REGISTRIES',
+        symbols=registry_mcdoc_symbols
+    )
+    
+    # TODO: == @spyglassmc/java-edition/src/dependency/mcmeta.ts > symbolRegistrar > addBuiltinSymbols 
+            
+        
+    
     # TODO: register the input mcdoc symbols here?
+    
+    
+    return symbol_table
+    
+if __name__ == '__main__':
+    rich.print(generate(GeneratorOptions()).__dict__['advancement'])

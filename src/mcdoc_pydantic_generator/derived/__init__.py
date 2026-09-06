@@ -247,10 +247,12 @@ NamespacePathSep = ':'
 DefaultNamespace = 'minecraft'
 
 def lengthen_resource_location(value: str) -> str:
-    match value.index(NamespacePathSep):
-        case -1:
-            return f'{DefaultNamespace}{NamespacePathSep}{value}'
-        case 0:
-            return f'{DefaultNamespace}{value}'
-        case _:
-            return value
+    try:
+        namespace_path_sep_index = value.index(NamespacePathSep)
+        match namespace_path_sep_index:
+            case 0:
+                return f'{DefaultNamespace}{value}'
+            case _:
+                return value
+    except ValueError:
+        return f'{DefaultNamespace}{NamespacePathSep}{value}'

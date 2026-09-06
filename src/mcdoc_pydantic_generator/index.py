@@ -148,12 +148,12 @@ def mcdoc_registrar(table: SymbolTable, source: str, symbols: McdocSymbols) -> N
         if resource_category in ('mcdoc', 'mcdoc/dispatcher', 'ref'):
             continue
         
-        table.__dict__.setdefault(resource_category, [])
+        setattr(table, resource_category, [])
         for entry in resource_category_entries:
-            if entry in table.__dict__[resource_category]:
+            if entry in table.__pydantic_extra__[resource_category]:  # ty: ignore[not-subscriptable]
                 logger.debug(f'Re-entry of {entry} in {resource_category}.')
-                
-            table.__dict__[resource_category].append(entry)
+            
+            table.__pydantic_extra__[resource_category].append(entry)  # ty: ignore[not-subscriptable]
         
         
                 
@@ -255,7 +255,7 @@ def generate(options: GeneratorOptions):
         if registry_id in (*derived.FileCategories, *derived.RegistryCategories):
             for entry_id in registry:
                 registry_mcdoc_symbols.setdefault(registry_id, [])  # ty: ignore[no-matching-overload]
-                registry_mcdoc_symbols[registry_id].append(derived.lengthen_resource_location(entry_id))  # ty: ignore[unresolved-attribute]
+                registry_mcdoc_symbols[registry_id].append(entry_id)  # ty: ignore[unresolved-attribute]
                 
     mcdoc_registrar(
         table=symbol_table,
@@ -273,4 +273,4 @@ def generate(options: GeneratorOptions):
     return symbol_table
     
 if __name__ == '__main__':
-    rich.print(generate(GeneratorOptions()).__dict__['advancement'])
+    rich.print(generate(GeneratorOptions()).__pydantic_extra__['advancement'])

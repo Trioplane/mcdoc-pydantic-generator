@@ -12,15 +12,15 @@ from pydantic import BaseModel, ConfigDict
 
 from mcdoc_pydantic_generator import derived
 from mcdoc_pydantic_generator.util.fetch import fetch_one
-from mcdoc_pydantic_generator.util.version import VersionEntry, get_latest_snapshot
+from mcdoc_pydantic_generator.util.version import VersionEntry, get_latest_snapshot, compare_versions
 
 logger = logging.getLogger('mcdoc-pydantic-generator')
+logging.basicConfig(level=logging.INFO)
 
 VANILLA_MCDOC_SOURCES = [
   'https://api.spyglassmc.com/vanilla-mcdoc/symbols',
   'https://raw.githubusercontent.com/SpyglassMC/vanilla-mcdoc/refs/heads/generated/symbols.json',
 ]
-VANILLA_MCDOC_URI = 'mcdoc://vanilla-mcdoc/symbols.json'
 
 
 class GeneratorOptions(BaseModel):
@@ -93,7 +93,7 @@ def fetch_translation_keys() -> list[str]:
 
 # Version logic inside initialize in mcdoc-ts-generator, simplified
 # Can fix later to actually get the correct versions depending on the minor release.
-def fetch_version(target_version: str) -> str:
+def fetch_version(target_version: str) -> tuple[str, list[VersionEntry]]:
     logger.debug(f'[fetch_version] {target_version}')
     
     try:
@@ -111,17 +111,17 @@ def fetch_version(target_version: str) -> str:
         
     release = version["id"]
     
-    return release
-    
-class SymbolEntry(BaseModel):
-    source: str
-    type_def: dict[str, Any]
+    return (release, versions)
 
-class SymbolTable(BaseModel):
-    model_config = ConfigDict(extra='allow')
-    
-    mcdoc: dict[str, SymbolEntry] = {}
-    dispatchers: dict[str, dict[str, SymbolEntry]] = {}
+SymbolEntry = TypedDict('SymbolEntry', {
+    'source': str,
+    'type_def': dict[str, Any]
+})
+
+SymbolTable = TypedDict('SymbolTable', {
+    'mcdoc': dict[str, SymbolEntry],
+    'mcdoc/dispatcher': dict[str, dict[str, SymbolEntry]],
+}, extra_items=Any)
     
 class SymbolCollisionError(Exception):
     pass
@@ -130,30 +130,31 @@ def mcdoc_registrar(table: SymbolTable, source: str, symbols: McdocSymbols) -> N
     """Push symbols to a shared table and tag them with source so we have verbose errors in case of collision."""
     start = time.perf_counter()
     
-    for id, type_def in symbols["mcdoc"].items():
-        if id in table.mcdoc:
-            raise SymbolCollisionError(f'Ids collided on {id} from {table.mcdoc[id].source} and {source}')
+    for id, type_def in symbols['mcdoc'].items():
+        if id in table['mcdoc']:
+            raise SymbolCollisionError(f'Ids collided on {id} from {table['mcdoc'][id]['source']} and {source}')
         else:
-            table.mcdoc[id] = SymbolEntry(source=source, type_def=type_def)
+            table['mcdoc'][id] = {'source': source, 'type_def': type_def}
 
     for dispatcher, members in symbols["mcdoc/dispatcher"].items():
-        table.dispatchers.setdefault(dispatcher, {})
+        table['mcdoc/dispatcher'].setdefault(dispatcher, {})
         for member_id, type_def in members.items():
-            if member_id in table.dispatchers[dispatcher]:
-                raise SymbolCollisionError(f'Member ids collided on {member_id} from dispatchers {table.dispatchers[dispatcher][member_id].source} and input symbols {source}')
+            if member_id in table['mcdoc/dispatcher'][dispatcher]:
+                raise SymbolCollisionError(f'Member ids collided on {member_id} from dispatchers {table['mcdoc/dispatcher'][dispatcher][member_id]['source']} and input symbols {source}')
             else:
-                table.dispatchers[dispatcher][member_id] = SymbolEntry(source=source, type_def=type_def)
+                table['mcdoc/dispatcher'][dispatcher][member_id] = {'source': source, 'type_def': type_def}
                 
     for resource_category, resource_category_entries in symbols.items():
         if resource_category in ('mcdoc', 'mcdoc/dispatcher', 'ref'):
             continue
         
-        setattr(table, resource_category, [])
+        # TODO: fix this mess, also like be consistent on whether we use pydantic models or typeddicts
+        table.setdefault(resource_category, [])  # ty: ignore[no-matching-overload]
         for entry in resource_category_entries:
-            if entry in table.__pydantic_extra__[resource_category]:  # ty: ignore[not-subscriptable]
+            if entry in table[resource_category]: 
                 logger.debug(f'Re-entry of {entry} in {resource_category}.')
             
-            table.__pydantic_extra__[resource_category].append(entry)  # ty: ignore[not-subscriptable]
+            table[resource_category].append(entry)  # ty: ignore[unresolved-attribute]
         
         
                 
@@ -163,11 +164,15 @@ def mcdoc_registrar(table: SymbolTable, source: str, symbols: McdocSymbols) -> N
 # skip initialize, its spyglass stuff
     
 def generate(options: GeneratorOptions):
-    symbol_table = SymbolTable()
+    symbol_table: SymbolTable = {
+        'mcdoc': {},
+        'mcdoc/dispatcher': {}
+    }
     
     # Fetch and register vanilla mcdoc to symbol table
     vanilla_mcdoc_data: tuple[McdocSymbols, str] | None = None
     
+    logger.info('[generate] Fetching vanilla-mcdoc')
     for vanilla_mcdoc_source in VANILLA_MCDOC_SOURCES:
         try:
             fetched_mcdoc = fetch_mcdoc(vanilla_mcdoc_source)
@@ -183,6 +188,7 @@ def generate(options: GeneratorOptions):
     if vanilla_mcdoc_data is None:
         raise requests.HTTPError("Could not fetch vanilla-mcdoc from Spyglass API and GitHub.")
     
+    logger.info('[generate] Registering vanilla-mcdoc to symbol table')
     mcdoc_registrar(
         table=symbol_table,
         source=vanilla_mcdoc_data[1],
@@ -190,16 +196,23 @@ def generate(options: GeneratorOptions):
     )
     
     # Add registries to the symbol table
-    version = fetch_version(options.minecraft_version)
+    logger.info('[generate] Fetching minecraft version')
+    version, versions_list = fetch_version(options.minecraft_version)
     
+    logger.info(f'[generate] Fetching registries for version {version}')
     registries, registries_etag = fetch_registries(version)
+    
+    logger.info(f'[generate] Fetching block and fluid states for {version}')
     block_states, block_states_etag = fetch_block_states(version)
     fluids: derived.McmetaStates = derived.Fluids
+    
+    logger.info('[generate] Fetching translation keys')
     translation_keys = fetch_translation_keys()
     
     # TODO: Transform all of that above into mcdoc symbols and register into symbol table
     
     # == @spyglassmc/java-edition/src/dependency/mcmeta.ts > symbolRegistrar > addStatesSymbols
+    logger.info('[generate] Adding block and fluid states to symbols table')
     state_types = {'block': block_states, 'fluid': fluids}
     state_type_mcdoc_symbols: McdocSymbols = {
         'mcdoc': {},
@@ -246,6 +259,7 @@ def generate(options: GeneratorOptions):
     )
         
     # TODO: == @spyglassmc/java-edition/src/dependency/mcmeta.ts > symbolRegistrar > addRegistrySymbols
+    logger.info('[generate] Adding registries to symbols table')
     registry_mcdoc_symbols: McdocSymbols = {
         'mcdoc': {},
         'mcdoc/dispatcher': {}
@@ -264,13 +278,32 @@ def generate(options: GeneratorOptions):
     )
     
     # TODO: == @spyglassmc/java-edition/src/dependency/mcmeta.ts > symbolRegistrar > addBuiltinSymbols 
-            
+    logger.info('[generate] Adding builtins to symbols table')
+    builtin_type_mcdoc_symbols: McdocSymbols = {
+        'mcdoc': {},
+        'mcdoc/dispatcher': {},
+    }
+    if compare_versions(versions_list, version, '1.21.2') < 0:
+        builtin_type_mcdoc_symbols.setdefault('loot_table', [])
+        builtin_type_mcdoc_symbols['loot_table'].append('minecraft:empty')
         
+    builtin_type_mcdoc_symbols.setdefault('model', [])
+    builtin_type_mcdoc_symbols['model'].append('minecraft:builtin/generated')
     
+    if compare_versions(versions_list, version, '1.21.4') < 0:
+        builtin_type_mcdoc_symbols['model'].append('minecraft:builtin/entity')
+        
+    mcdoc_registrar(
+        table=symbol_table,
+        source='MCMETA_REGISTRIES',
+        symbols=builtin_type_mcdoc_symbols
+    )
+        
     # TODO: register the input mcdoc symbols here?
-    
+    # TODO: not important right now.
+    logger.info('[generate] Registering input mcdoc symbols to symbols table')
     
     return symbol_table
     
 if __name__ == '__main__':
-    rich.print(generate(GeneratorOptions()).__pydantic_extra__['advancement'])
+    print(generate(GeneratorOptions())['loot_table'])

@@ -236,7 +236,7 @@ def generate(options: GeneratorOptions):
                         'kind': 'union',
                         'members': [{
                             'kind': 'literal',
-                            'value': { 'kind': 'string', value: value }
+                            'value': { 'kind': 'string', 'value': value }
                         } for value in prop_value]
                     }
                 } for prop_key, prop_value in properties.items()]
@@ -270,6 +270,11 @@ def generate(options: GeneratorOptions):
             for entry_id in registry:
                 registry_mcdoc_symbols.setdefault(registry_id, [])  # ty: ignore[no-matching-overload]
                 registry_mcdoc_symbols[registry_id].append(entry_id)  # ty: ignore[unresolved-attribute]
+                
+    # Add translation keys to the symbol table too.
+    logger.info('[generate] Adding translation key registry to symbols table')
+    registry_mcdoc_symbols.setdefault('translation_key', [])
+    registry_mcdoc_symbols['translation_key'] += translation_keys
                 
     mcdoc_registrar(
         table=symbol_table,
@@ -306,4 +311,4 @@ def generate(options: GeneratorOptions):
     return symbol_table
     
 if __name__ == '__main__':
-    print(generate(GeneratorOptions())['loot_table'])
+    rich.print(generate(GeneratorOptions())['translation_key'])

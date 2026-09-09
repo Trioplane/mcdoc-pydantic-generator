@@ -20,6 +20,8 @@ Fluids: McmetaStates = {
 
 # == @spyglassmc/core/src/symbol/Symbols.ts > FileCategories
 
+McdocCategories = ('mcdoc', 'mcdoc/dispatcher')
+
 RegistryCategories = (
     'activity',
     'armor_material', # Removed
@@ -212,6 +214,26 @@ TagFileCategories = tuple(f'tag/{key}' for key in TaggableResourceLocationCatego
 
 DataFileCategories = (*NormalFileCategories, *TagFileCategories, *WorldgenFileCategories)
 
+DataMiscCategories = (
+    'attribute_modifier',
+	'bossbar',
+	'jigsaw_block_name',
+	'random_sequence',
+	'storage',
+	'stopwatch',
+)
+
+DatapackCategories = (
+    'attribute_modifier_uuid',
+	'objective',
+	'player_uuid',
+	'score_holder',
+	'tag',
+	'team',
+    *DataFileCategories,
+    *DataMiscCategories,
+)
+
 AssetsFileCategories = (
     'atlas',
     'block_definition', # blockstates
@@ -238,7 +260,25 @@ AssetsFileCategories = (
     'waypoint_style',
 )
 
+AssetsMiscCategories = (
+    'texture_slot',
+	'shader_target',
+	'translation_key',
+)
+
+ResourcepackCategories = (
+    *AssetsMiscCategories,
+    *AssetsFileCategories,
+)
+
 FileCategories = (*DataFileCategories, *AssetsFileCategories)
+
+AllCategories = (
+    *DatapackCategories,
+    *ResourcepackCategories,
+    *McdocCategories,
+    *RegistryCategories
+)
 
 # == @spyglassmc/core/src/common/utils.ts > ResourceLocation#lengthen
 

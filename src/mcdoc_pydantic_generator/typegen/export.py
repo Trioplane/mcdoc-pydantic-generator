@@ -1,7 +1,5 @@
+from mcdoc_pydantic_generator.typegen.shared_types import ResolvedSymbol, ResolvedRegistry
 from pydantic import BaseModel
-
-from .index import ResolvedRegistry, ResolvedSymbol
-
 
 class ExportDispatchersPathsArgument(BaseModel):
     symbol_name: str

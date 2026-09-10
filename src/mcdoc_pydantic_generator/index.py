@@ -1,3 +1,5 @@
+from mcdoc_pydantic_generator.shared_types import SymbolTable
+from mcdoc_pydantic_generator.typegen.index import TypesGenerator
 import logging
 import re
 import time
@@ -53,9 +55,7 @@ def fetch_registries(version_id: str) -> tuple[dict[str, list[str]], str | None]
         
         data: dict[str, list[str]] = req.json()
         
-        result = {}
-        for id in data:  # noqa: PLC0206
-            result[id] = [f"minecraft:{entry}" for entry in data[id]]
+        result = data
         
         return (result, etag)
     except Exception:
@@ -112,18 +112,6 @@ def fetch_version(target_version: str) -> tuple[str, list[VersionEntry]]:
     release = version["id"]
     
     return (release, versions)
-
-SymbolEntry = TypedDict('SymbolEntry', {
-    'source': str,
-    'type_def': dict[str, Any]
-})
-
-type SymbolMap = dict[str, SymbolEntry] | dict[str, dict[str, SymbolEntry]]
-
-SymbolTable = TypedDict('SymbolTable', {
-    'mcdoc': dict[str, SymbolEntry],
-    'mcdoc/dispatcher': dict[str, dict[str, SymbolEntry]],
-}, extra_items=Any)
     
 class SymbolCollisionError(Exception):
     pass
@@ -310,7 +298,15 @@ def generate(options: GeneratorOptions):
     # TODO: not important right now.
     logger.info('[generate] Registering input mcdoc symbols to symbols table')
     
+    # WARNING: DEBUG CODE!!!
+    type_gen = TypesGenerator()
+    
+    type_gen.resolve_types(
+        symbols=symbol_table, 
+        translation_keys=translation_keys
+    )
+    
     return symbol_table
     
 if __name__ == '__main__':
-    rich.print(generate(GeneratorOptions())['translation_key'])
+    generate(GeneratorOptions())
